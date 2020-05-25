@@ -62,8 +62,8 @@ public class TransportProxy extends Transport
 	long connectRetryPeriod;
 	private TransportConnector[] connectors;
 	private MessageSender[] senders;
-	private List idleSenderList = new LinkedList();
-	private List idleConnectorList = new LinkedList();
+	private final List idleSenderList = new LinkedList();
+	private final List idleConnectorList = new LinkedList();
 	private long connectTimeout;
 	private SenderStrategy senderStrategy = new SimpleSenderStrategy();
 	
@@ -71,6 +71,7 @@ public class TransportProxy extends Transport
 	 * Constructs a new TransportProxy.
 	 * @param session
 	 * @param url
+	 * @throws javax.mail.MessagingException
 	 */
 	public TransportProxy(Session session, URLName url) throws MessagingException
 	{
@@ -102,26 +103,22 @@ public class TransportProxy extends Transport
 		try
 		{
 			Class senderStrategyClass = Class.forName(senderStrategyClassName);
-			Object senderStrategy = senderStrategyClass.newInstance();
+			Object lSenderStrategy = senderStrategyClass.newInstance();
 			
-			if (!SenderStrategy.class.isInstance(senderStrategy))
+			if (!SenderStrategy.class.isInstance(lSenderStrategy))
 			{
 				throw new MessagingException("Sender strategry " + senderStrategyClassName + " does not implement " + SenderStrategy.class.getName());
 			}
 			
-			this.senderStrategy = (SenderStrategy) senderStrategy;
+			this.senderStrategy = (SenderStrategy) lSenderStrategy;
 		}
-		catch (ClassNotFoundException e)
+		catch (ClassNotFoundException | IllegalAccessException e)
 		{
 			throw new MessagingException("Invalid sender strategy: " + senderStrategyClassName, e);
 		}
 		catch (InstantiationException e)
 		{
 			throw new MessagingException("Failed to create sender strategy: " + senderStrategyClassName, e);
-		}
-		catch (IllegalAccessException e)
-		{
-			throw new MessagingException("Invalid sender strategy: " + senderStrategyClassName, e);
 		}
 		
 		Provider provider = null;
@@ -156,7 +153,7 @@ public class TransportProxy extends Transport
 		for (int i = 0; i < size; ++i)
 		{
 			Transport transport = this.session.getTransport(provider);
-			Integer index = new Integer(i);
+			Integer index = i;
 			
 			this.connectors[i] = new TransportConnector(transport, index);
 			this.senders[i] = new MessageSender(index);
@@ -167,9 +164,15 @@ public class TransportProxy extends Transport
 	/**
 	 * Creates and starts a new connector thread for each underlying transport.
 	 * This method returns after the first successful transport connection is made.
+	 * @param hostList
+	 * @param port
+	 * @param user
+	 * @param password
+	 * @return 
 	 * @see javax.mail.Service#protocolConnect(java.lang.String, int, java.lang.String, java.lang.String)
 	 * @throws MessagingException if no transports were connected within the timeout configured via the {@link net.sf.hajavamail.TransportProxy#CONNECT_TIMEOUT} session property.
 	 */
+	@Override
 	protected boolean protocolConnect(String hostList, int port, String user, String password) throws MessagingException
 	{
 		String[] hosts = hostList.split(",");
@@ -178,9 +181,9 @@ public class TransportProxy extends Transport
 		{
 			String host = hosts[i % hosts.length];
 			
-			URLName url = new URLName(this.connectors[i].getTransport().getURLName().getProtocol(), host, port, this.connectors[i].getTransport().getURLName().getFile(), user, password);
+			URLName lurl = new URLName(this.connectors[i].getTransport().getURLName().getProtocol(), host, port, this.connectors[i].getTransport().getURLName().getFile(), user, password);
 			
-			this.connectors[i].connect(url);
+			this.connectors[i].connect(lurl);
 		}
 
 		boolean connectFailed = false;
@@ -219,6 +222,9 @@ public class TransportProxy extends Transport
 	
 	/**
 	 * Performs simple message validation before sending using the sender strategy configured via the {@link net.sf.hajavamail.TransportProxy#SENDER_STRATEGY} session property.
+	 * @param message
+	 * @param addresses
+	 * @throws javax.mail.MessagingException
 	 * @see javax.mail.Transport#sendMessage(javax.mail.Message, javax.mail.Address[])
 	 */
 	@Override
@@ -283,7 +289,7 @@ public class TransportProxy extends Transport
 			index = (Integer) this.idleSenderList.remove(0);
 		}
 		
-		return this.senders[index.intValue()];
+		return this.senders[index];
 	}
 	
 	void releaseSender(MessageSender sender)
@@ -317,7 +323,7 @@ public class TransportProxy extends Transport
 			index = (Integer) this.idleConnectorList.remove(0);
 		}
 		
-		return this.connectors[index.intValue()];
+		return this.connectors[index];
 	}
 	
 	void releaseConnector(TransportConnector connector)
@@ -331,8 +337,10 @@ public class TransportProxy extends Transport
 	}
 
 	/**
+	 * @param listener
 	 * @see javax.mail.Transport#addTransportListener(javax.mail.event.TransportListener)
 	 */
+	@Override
 	public void addTransportListener(TransportListener listener)
 	{
 		for (int i = 0; i < this.connectors.length; ++i)
@@ -342,8 +350,10 @@ public class TransportProxy extends Transport
 	}
 
 	/**
+	 * @param listener
 	 * @see javax.mail.Transport#removeTransportListener(javax.mail.event.TransportListener)
 	 */
+	@Override
 	public void removeTransportListener(TransportListener listener)
 	{
 		for (int i = 0; i < this.connectors.length; ++i)
@@ -360,8 +370,10 @@ public class TransportProxy extends Transport
 	 * 	<li>Closes the underlying transports</li>
 	 *  <li>Calls <code>javax.mail.Service.close()</code></li>
 	 * </ol>
+	 * @throws javax.mail.MessagingException
 	 * @see javax.mail.Service#close()
 	 */
+	@Override
 	public void close() throws MessagingException
 	{
 		synchronized (this.idleSenderList)
@@ -409,17 +421,17 @@ public class TransportProxy extends Transport
 				
 				if (transport.isConnected())
 				{
-					URLName url = transport.getURLName();
+					URLName turl = transport.getURLName();
 					
 					try
 					{
 						transport.close();
 						
-						log.info("Successfully closed " + url.getProtocol() + " connection to " + url.getHost());
+						log.info("Successfully closed " + turl.getProtocol() + " connection to " + turl.getHost());
 					}
 					catch (MessagingException e)
 					{
-						log.warn("Failed to close " + url.getProtocol() + " connection to " + url.getHost());
+						log.warn("Failed to close " + turl.getProtocol() + " connection to " + turl.getHost());
 					}
 				}
 			}
@@ -432,8 +444,10 @@ public class TransportProxy extends Transport
 	
 	/**
 	 * Closes the transpory proxy, if not closed already.
+	 * @throws java.lang.Throwable
 	 * @see java.lang.Object#finalize()
 	 */
+	@Override
 	protected void finalize() throws Throwable
 	{
 		if (this.isConnected())
@@ -488,6 +502,7 @@ public class TransportProxy extends Transport
 			this.thread.interrupt();
 		}
 		
+		@Override
 		public void run()
 		{
 			if (this.transport.isConnected())
@@ -550,6 +565,7 @@ public class TransportProxy extends Transport
 			return this.index;
 		}
 		
+		@Override
 		public void send(Message message, Address[] addresses)
 		{
 			this.message = message;
@@ -558,6 +574,7 @@ public class TransportProxy extends Transport
 			new Thread(this).start();
 		}
 		
+		@Override
 		public void run()
 		{
 			TransportConnector connector = null;
